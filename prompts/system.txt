@@ -1,0 +1,18 @@
+System Prompts for Multi-Agent LangGraph Pipeline
+
+This file lists all system-level behaviors used by the three LLM agents:
+- Router Agent
+- Planner Agent
+- Answerer Agent
+
+All system prompts are defined inside assistant_graph.py and disclosed verbatim in:
+- router.txt
+- planner.txt
+- answerer.txt
+
+These prompts enforce:
+- JSON-only outputs
+- Structured reasoning
+- Controlled tool use
+- Grounded answers
+- Safety and citation requirements
