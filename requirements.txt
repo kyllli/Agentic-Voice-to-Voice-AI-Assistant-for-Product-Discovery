@@ -9,3 +9,5 @@ pydantic==2.12.5
 python-dotenv==1.2.1
 Requests==2.32.5
 sentence_transformers==5.1.2
+pyarrow==22.0.0
+fastparquet==2024.11.0

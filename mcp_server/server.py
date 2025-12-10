@@ -5,6 +5,9 @@ from typing import Dict, Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from rag.search import search_products
 from .web_search import web_search
 

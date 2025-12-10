@@ -194,6 +194,8 @@ class TTSRequest(BaseModel):
 class VoiceResponse(BaseModel):
     transcript: str
     answer: str
+    products: list
+    citations: dict
     audio_base64: str
 
 
@@ -238,6 +240,8 @@ async def voice_interaction(
             or result.get("answer")
             or str(result)
         )
+        products = result.get("products", [])
+        citations = result.get("citations", {})
 
         print("Pipeline answer:", answer)
 
@@ -266,6 +270,8 @@ async def voice_interaction(
         return VoiceResponse(
             transcript=transcript,
             answer=answer,
+            products=products,
+            citations=citations,
             audio_base64=audio_b64,
         )
 

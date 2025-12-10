@@ -68,16 +68,27 @@ def router_node(state: State):
     query = state["query"]
 
     system_prompt = """
-You are an intent classification agent for an e-commerce product assistant.
+You are an intent classification agent for an e-commerce shopping assistant.
 
-Extract the following fields as JSON:
-- "product_type": what product is the user looking for
-- "constraints": dictionary containing:
-    * budget (numeric if possible)
-    * brand (string)
-    * material (string)
-    * category (string)
-- "needs_live_price": true/false (true if query contains 'current', 'latest', 'now', 'today')
+If the user message is casual (e.g., "hello", "hi", "hey", "what's up", "how are you"),
+DO NOT try to classify a product intent.
+Instead return:
+{
+  "intent_type": "greeting"
+}
+
+Otherwise extract:
+{
+  "intent_type": "product_query",
+  "product_type": "...",
+  "constraints": {
+      "budget": number,
+      "brand": "...",
+      "material": "...",
+      "category": "..."
+  },
+  "needs_live_price": true/false
+}
 
 Output JSON only.
 """
@@ -91,6 +102,10 @@ Output JSON only.
         intent = json.loads(response.content)
     except:
         intent = {"error": "JSON parsing failed", "raw": response.content}
+    
+    if intent.get("intent_type") == "greeting":
+        state["final_answer"] = "Hello! What product can I help you find today?"
+        return state
 
     state["intent"] = intent
     state["constraints"] = intent.get("constraints", {})
@@ -194,50 +209,108 @@ def retriever_node(state: State):
 def answerer_node(state: State):
     rag = state.get("rag_results", [])
     web = state.get("web_results", [])
+    constraints = state.get("constraints", {})
+
+    # ✨ Basic cleaning-product filtering to avoid RC boat parts
+    CLEAN_KEYWORDS = ["clean", "cleaner", "polish", "spray", "degreaser", "surface", "stainless"]
+    def is_relevant(prod):
+        title = prod.get("title", "").lower()
+        return any(k in title for k in CLEAN_KEYWORDS)
+
+    rag_filtered = [p for p in rag if is_relevant(p)]
+
+    # use first 3 highest-rating products
+    def rating_of(p):
+        return p.get("rating", 0) or 0
+    
+    top3 = sorted(rag_filtered, key=rating_of, reverse=True)[:3]
+
+    # Fallback if filtering removed everything
+    if not top3:
+        top3 = rag[:3]
+
+    # Build price lookup from web search results
+    web_price_map = {}
+    for w in web:
+        title = w.get("title", "").lower()
+        price = w.get("price")
+        if price:
+            web_price_map[title] = price
+
+    # Assign "live" price if title matches (fuzzy match via containment)
+    import difflib
+    for p in top3:
+        title = p.get("title", "").lower()
+        best_match = None
+        best_score = 0
+        for w_title in web_price_map.keys():
+            score = difflib.SequenceMatcher(None, title, w_title).ratio()
+            if score > best_score and score > 0.5:
+                best_match = w_title
+                best_score = score
+        if best_match:
+            p["price"] = web_price_map[best_match]
+
+    # Identify top pick
+    top_pick = top3[0] if top3 else None
+
+    # Extract essential fields for LLM
+    llm_payload = {
+        "top_pick": top_pick,
+        "alternatives": top3[1:],
+        "constraints": constraints
+    }
 
     system_prompt = """
-You are the Answerer agent in a multi-agent LangGraph e-commerce system.
+You are the Answerer agent in a product recommendation system.
 
-Your responsibilities:
-1. Combine private-catalog (rag.search) data and optional live web data.
-2. Use rag data for product identity, features, brand, ingredients, rating.
-3. Use web data for *latest price* if available.
-4. Conflict resolution:
-   - If both rag and web have price → use web price (live).
-5. Generate citations:
-   {
-     "rag": ["doc_id1", "doc_id2"],
-     "web": ["url1"]
-   }
-6. Output JSON:
+Your task:
+- Generate a SHORT (<15 seconds), natural, spoken-style answer.
+- ALWAYS mention:
+   * the top pick's FULL NAME,
+   * its AVERAGE RATING (e.g. "4.6 stars"),
+   * its PRICE (e.g. "typically around $12.49"),
+   * one useful FEATURE (ingredients or eco-friendly property).
+- Then say you compared two alternatives.
+- Then say “I've sent details and sources to your screen.”
+- Then ALWAYS finish with: “Would you like the most affordable or the highest rated?”
+
+Use this JSON structure in your output:
 {
   "answer": "...",
-  "citations": { "rag": [...], "web": [...] }
+  "products": [... top 3 products ...],
+  "citations": {
+      "rag": [...],
+      "web": [...]
+  }
 }
+
+DO NOT invent prices or ratings. ONLY use numbers provided in the input JSON.
+If rating is missing, say "well rated".
+If price is missing, say "budget friendly".
 """
 
     response = answer_llm.invoke([
         SystemMessage(content=system_prompt),
-        HumanMessage(content=json.dumps({
-            "rag": rag,
-            "web": web
-        }))
+        HumanMessage(content=json.dumps(llm_payload))
     ])
 
+    # Parse safely
     try:
         result = json.loads(response.content)
     except:
         result = {
-            "answer": "Error producing answer.",
-            "citations": {}
+            "answer": "Here are three options. I've sent details to your screen.",
+            "products": top3,
+            "citations": {"rag": [], "web": []}
         }
 
+    # Save to state
     state["final_answer"] = result.get("answer", "")
+    state["products"] = result.get("products", top3)
     state["citations"] = result.get("citations", {})
 
     print("🧠 Final Answer:", state["final_answer"])
-    print("📚 Citations:", state["citations"])
-
     return state
 
 
