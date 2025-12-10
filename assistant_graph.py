@@ -18,6 +18,7 @@ load_dotenv()
 
 # Import MCP client (your custom module)
 from mcp_client import call_rag_tool, call_web_tool
+from rag.search import normalize_url
 
 
 # ======================================================
@@ -207,110 +208,116 @@ def retriever_node(state: State):
 # ======================================================
 
 def answerer_node(state: State):
-    rag = state.get("rag_results", [])
-    web = state.get("web_results", [])
+    rag = state.get("rag_results", []) or []
+    web = state.get("web_results", []) or []
     constraints = state.get("constraints", {})
 
-    # ✨ Basic cleaning-product filtering to avoid RC boat parts
-    CLEAN_KEYWORDS = ["clean", "cleaner", "polish", "spray", "degreaser", "surface", "stainless"]
-    def is_relevant(prod):
-        title = prod.get("title", "").lower()
-        return any(k in title for k in CLEAN_KEYWORDS)
+    # ============================================================
+    # 1. If no RAG results → fallback answer
+    # ============================================================
+    if not rag:
+        state["products"] = []
+        state["final_answer"] = (
+            "Sorry, I couldn't find matching products for your request. "
+            "Try adjusting your budget or adding more details."
+        )
+        return state
 
-    rag_filtered = [p for p in rag if is_relevant(p)]
+    # ============================================================
+    # 2. Select Top 3 products (simple scoring: rating + price OK)
+    # ============================================================
 
-    # use first 3 highest-rating products
-    def rating_of(p):
-        return p.get("rating", 0) or 0
-    
-    top3 = sorted(rag_filtered, key=rating_of, reverse=True)[:3]
+    def score(p):
+        r = p.get("rating", 0) or 0
+        price = p.get("price", None)
+        
+        # Rating helps
+        s = r
 
-    # Fallback if filtering removed everything
-    if not top3:
-        top3 = rag[:3]
+        # If user has budget, penalize items above budget
+        budget = constraints.get("budget")
+        if budget and price and price > budget:
+            s -= 2
 
-    # Build price lookup from web search results
-    web_price_map = {}
-    for w in web:
-        title = w.get("title", "").lower()
-        price = w.get("price")
-        if price:
-            web_price_map[title] = price
+        return s
 
-    # Assign "live" price if title matches (fuzzy match via containment)
+    sorted_items = sorted(rag, key=score, reverse=True)
+    top3 = sorted_items[:3]
+
+    # ============================================================
+    # 3. Merge Web Pricing when matched by fuzzy title similarity
+    # ============================================================
     import difflib
+
+    def fuzzy(a, b):
+        return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
     for p in top3:
         title = p.get("title", "").lower()
-        best_match = None
-        best_score = 0
-        for w_title in web_price_map.keys():
-            score = difflib.SequenceMatcher(None, title, w_title).ratio()
-            if score > best_score and score > 0.5:
-                best_match = w_title
-                best_score = score
-        if best_match:
-            p["price"] = web_price_map[best_match]
+        for w in web:
+            w_title = w.get("title", "").lower()
+            if fuzzy(title, w_title) > 0.55 and w.get("price"):
+                p["price"] = w["price"]
 
-    # Identify top pick
-    top_pick = top3[0] if top3 else None
+    # ============================================================
+    # 4. Normalize metadata objects for UI table
+    # ============================================================
+    normalized = []
+    for p in top3:
+        normalized.append({
+            "id": p.get("id"),
+            "title": p.get("title", "Unnamed Product"),
+            "brand": p.get("brand", ""),
+            "price": p.get("price"),
+            "rating": p.get("rating"),
+            "ingredients": p.get("ingredients", ""),
+            "features": p.get("features", ""),
+            "product_url": normalize_url(p.get("product_url", "")),
+            "image_url": normalize_url(p.get("image_url", "")),
+            "doc_id": p.get("doc_id")
+        })
 
-    # Extract essential fields for LLM
-    llm_payload = {
-        "top_pick": top_pick,
-        "alternatives": top3[1:],
-        "constraints": constraints
-    }
+    state["products"] = normalized
 
-    system_prompt = """
-You are the Answerer agent in a product recommendation system.
+    # ============================================================
+    # 5. Top Pick → natural language answer
+    # ============================================================
+    top_pick = normalized[0]
 
-Your task:
-- Generate a SHORT (<15 seconds), natural, spoken-style answer.
-- ALWAYS mention:
-   * the top pick's FULL NAME,
-   * its AVERAGE RATING (e.g. "4.6 stars"),
-   * its PRICE (e.g. "typically around $12.49"),
-   * one useful FEATURE (ingredients or eco-friendly property).
-- Then say you compared two alternatives.
-- Then say “I've sent details and sources to your screen.”
-- Then ALWAYS finish with: “Would you like the most affordable or the highest rated?”
+    system_prompt = f"""
+You are an e-commerce shopping assistant.
+Generate a SHORT (<15 seconds) spoken answer about the *single Top Pick* product ONLY.
 
-Use this JSON structure in your output:
-{
-  "answer": "...",
-  "products": [... top 3 products ...],
-  "citations": {
-      "rag": [...],
-      "web": [...]
-  }
-}
+Rules:
+- DO NOT mention other products.
+- ONLY use values actually present:
+      title
+      brand
+      rating (only if > 0)
+      price (only if > 0)
+      features (optional)
+- If rating is missing or -1, do NOT mention rating.
+- If price is missing, do NOT mention price.
+- Keep it friendly, concise, and helpful.
+- DO NOT guess or invent numbers.
+- End with:
+  "I've sent details and sources to your screen. Would you like the most affordable or the highest rated?"
 
-DO NOT invent prices or ratings. ONLY use numbers provided in the input JSON.
-If rating is missing, say "well rated".
-If price is missing, say "budget friendly".
+Top Pick (JSON):
+{json.dumps(top_pick, indent=2)}
+
+Output ONLY the spoken answer, no JSON.
 """
 
     response = answer_llm.invoke([
         SystemMessage(content=system_prompt),
-        HumanMessage(content=json.dumps(llm_payload))
+        HumanMessage(content="Generate answer.")
     ])
 
-    # Parse safely
-    try:
-        result = json.loads(response.content)
-    except:
-        result = {
-            "answer": "Here are three options. I've sent details to your screen.",
-            "products": top3,
-            "citations": {"rag": [], "web": []}
-        }
+    state["final_answer"] = response.content.strip()
 
-    # Save to state
-    state["final_answer"] = result.get("answer", "")
-    state["products"] = result.get("products", top3)
-    state["citations"] = result.get("citations", {})
-
-    print("🧠 Final Answer:", state["final_answer"])
+    print("\n🧠 Final Answer:", state["final_answer"])
+    print("🛒 Products returned to UI:", normalized)
     return state
 
 
