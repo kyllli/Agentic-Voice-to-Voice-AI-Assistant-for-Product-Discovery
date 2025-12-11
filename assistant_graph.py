@@ -22,6 +22,17 @@ from rag.search import normalize_url
 
 
 # ======================================================
+# 0. Domain Setup — Toys & Games Only
+# ======================================================
+
+ALLOWED_CATEGORIES = [
+    "toy", "toys", "games", "game", "board game", "board games",
+    "puzzle", "puzzles", "action figure", "action figures",
+    "kids toy", "children toy", "plush", "lego"
+]
+
+
+# ======================================================
 # 1. Shared State Definition
 # ======================================================
 
@@ -34,6 +45,7 @@ class State(TypedDict, total=False):
     web_results: List[Dict[str, Any]]
     final_answer: str
     citations: Dict[str, Any]
+    products: List[Dict[str, Any]]  # for UI table
 
 
 initial_state: State = {
@@ -44,7 +56,8 @@ initial_state: State = {
     "rag_results": [],
     "web_results": [],
     "final_answer": "",
-    "citations": {}
+    "citations": {},
+    "products": [],
 }
 
 
@@ -62,17 +75,28 @@ answer_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
 
 # ======================================================
-# 3. Router Agent
+# 3. Router Agent (UPDATED)
 # ======================================================
 
 def router_node(state: State):
-    query = state["query"]
+    query = state["query"].strip()
+
+    # ---------- 0. Hard-coded greeting check (no LLM needed) ----------
+    lower_q = query.lower()
+    simple_greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
+
+    if any(lower_q == g or lower_q.startswith(g + ",") for g in simple_greetings):
+        state["intent"] = {"intent_type": "greeting"}
+        state["final_answer"] = "Hello! What product can I help you find today?"
+        state["products"] = []
+        print("🔎 Router Output: greeting")
+        return state
 
     system_prompt = """
 You are an intent classification agent for an e-commerce shopping assistant.
 
 If the user message is casual (e.g., "hello", "hi", "hey", "what's up", "how are you"),
-DO NOT try to classify a product intent.
+DO NOT classify a product intent.
 Instead return:
 {
   "intent_type": "greeting"
@@ -101,13 +125,33 @@ Output JSON only.
 
     try:
         intent = json.loads(response.content)
-    except:
+    except Exception:
         intent = {"error": "JSON parsing failed", "raw": response.content}
-    
+
+    # ---------- 1. Greeting ----------
     if intent.get("intent_type") == "greeting":
+        state["intent"] = {"intent_type": "greeting"}
         state["final_answer"] = "Hello! What product can I help you find today?"
+        state["products"] = []
+        print("🔎 Router Output (LLM greeting):", intent)
         return state
 
+    # ---------- 2. Out-of-domain detection (still a product_query, but not toys/games) ----------
+    product_type = (intent.get("product_type") or "").lower()
+    is_in_domain = any(keyword in product_type for keyword in ALLOWED_CATEGORIES)
+
+    if product_type and not is_in_domain:
+        state["intent"] = {"intent_type": "out_of_domain", "product_type": product_type}
+        state["final_answer"] = (
+            "Sorry — my product database currently focuses on Toys & Games. "
+            "I might not have good recommendations for this category. "
+            "Try asking for a toy, puzzle, board game, LEGO set, or kids item."
+        )
+        state["products"] = []
+        print("🔎 Router Output: out_of_domain", intent)
+        return state
+
+    # ---------- 3. Normal product query ----------
     state["intent"] = intent
     state["constraints"] = intent.get("constraints", {})
 
@@ -116,34 +160,37 @@ Output JSON only.
 
 
 # ======================================================
-# 4. Planner Agent
+# 4. Planner Agent (skip for non-product intents)
 # ======================================================
 
 def planner_node(state: State):
-    intent = state["intent"]
-    constraints = state["constraints"]
+    intent = state.get("intent", {})
+    if intent.get("intent_type") != "product_query":
+        # For greeting / out_of_domain, no plan needed
+        return state
+
+    constraints = state.get("constraints", {})
 
     system_prompt = """
 You are the Planner agent in a multi-agent e-commerce system using LangGraph.
 
 Your job:
 1. Determine which tools to call:
-   - "rag.search" → always needed to retrieve structured product data.
-   - "web.search" → only if user needs real-time or latest price/availability.
+   - "rag.search" → always needed for structured product data.
+   - "web.search" → only if user needs real-time price/availability.
 
-2. Create a clear execution plan:
+2. Produce:
    {
      "tools": ["rag.search", "web.search"],
      "fields_needed": ["price", "rating", "ingredients"],
-     "reason": "Why these tools in this order",
-     "conflict_policy": "web_price_overwrites" or "prefer_private_price"
+     "reason": "...",
+     "conflict_policy": "web_price_overwrites"
    }
 
 Rules:
-- RAG always used first for product grounding.
-- If `needs_live_price` is true, add web.search.
-- If budget constraints exist, ensure "price" in fields_needed.
-- If materials or ingredients are constraints, add "ingredients".
+- RAG always first.
+- Add web.search only if needs_live_price is true.
+- Include fields based on constraints (price, material, etc.).
 
 Output JSON only.
 """
@@ -158,7 +205,7 @@ Output JSON only.
 
     try:
         plan = json.loads(response.content)
-    except:
+    except Exception:
         plan = {"error": "JSON parsing failed", "raw": response.content}
 
     state["plan"] = plan
@@ -167,30 +214,37 @@ Output JSON only.
 
 
 # ======================================================
-# 5. Retriever Agent — MCP Tools
+# 5. Retriever Agent — MCP Tools (UPDATED constraints for RAG)
 # ======================================================
 
 def retriever_node(state: State):
-    """
-    Executes the tools specified by the planner using real MCP tools.
-    """
+    intent = state.get("intent", {})
+    if intent.get("intent_type") != "product_query":
+        # No retrieval for greeting / out_of_domain
+        return state
+
     plan = state.get("plan", {})
-    tools = plan.get("tools", [])
+    tools = plan.get("tools", []) or []
 
     query = state["query"]
-    constraints = state.get("constraints", {})
+    raw_constraints = state.get("constraints", {}) or {}
 
-    # Run RAG first
+    # Only forward SAFE constraints to RAG (avoid strict brand/category filters)
+    rag_constraints: Dict[str, Any] = {}
+    if "budget" in raw_constraints:
+        rag_constraints["budget"] = raw_constraints["budget"]
+
+    # ---------- RAG first ----------
     if "rag.search" in tools:
         rag_results = call_rag_tool(
             query=query,
-            constraints=constraints,
+            constraints=rag_constraints,
             max_results=5,
         )
         state["rag_results"] = rag_results
         print("📘 RAG Results:", rag_results)
 
-    # Then optionally Web Search
+    # ---------- Optional Web Search ----------
     if "web.search" in tools:
         web_results = call_web_tool(
             query=query,
@@ -204,65 +258,59 @@ def retriever_node(state: State):
 
 
 # ======================================================
-# 6. Answerer Agent
+# 6. Answerer Agent (respects greeting / out_of_domain)
 # ======================================================
 
 def answerer_node(state: State):
+    intent = state.get("intent", {})
+    intent_type = intent.get("intent_type")
+
+    # ---------- 0. For greeting / out_of_domain, do NOT overwrite router's answer ----------
+    if intent_type in ("greeting", "out_of_domain"):
+        # Ensure UI table is empty in these cases
+        state["products"] = []
+        return state
+
     rag = state.get("rag_results", []) or []
     web = state.get("web_results", []) or []
-    constraints = state.get("constraints", {})
+    constraints = state.get("constraints", {}) or {}
 
-    # ============================================================
-    # 1. If no RAG results → fallback answer
-    # ============================================================
+    # ---------- 1. If no RAG results → fallback ----------
     if not rag:
         state["products"] = []
         state["final_answer"] = (
-            "Sorry, I couldn't find matching products for your request. "
+            "Sorry, I couldn't find matching products. "
             "Try adjusting your budget or adding more details."
         )
         return state
 
-    # ============================================================
-    # 2. Select Top 3 products (simple scoring: rating + price OK)
-    # ============================================================
-
+    # ---------- 2. Select Top 3 products ----------
     def score(p):
         r = p.get("rating", 0) or 0
-        price = p.get("price", None)
-        
-        # Rating helps
+        price = p.get("price")
         s = r
-
-        # If user has budget, penalize items above budget
         budget = constraints.get("budget")
         if budget and price and price > budget:
             s -= 2
-
         return s
 
     sorted_items = sorted(rag, key=score, reverse=True)
     top3 = sorted_items[:3]
 
-    # ============================================================
-    # 3. Merge Web Pricing when matched by fuzzy title similarity
-    # ============================================================
+    # ---------- 3. Merge Web Pricing when matched by fuzzy title ----------
     import difflib
 
     def fuzzy(a, b):
         return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
     for p in top3:
-        title = p.get("title", "").lower()
+        title = p.get("title", "")
         for w in web:
-            w_title = w.get("title", "").lower()
-            if fuzzy(title, w_title) > 0.55 and w.get("price"):
+            if fuzzy(title, w.get("title", "")) > 0.55 and w.get("price"):
                 p["price"] = w["price"]
 
-    # ============================================================
-    # 4. Normalize metadata objects for UI table
-    # ============================================================
-    normalized = []
+    # ---------- 4. Normalize metadata for UI ----------
+    normalized: List[Dict[str, Any]] = []
     for p in top3:
         normalized.append({
             "id": p.get("id"),
@@ -279,9 +327,7 @@ def answerer_node(state: State):
 
     state["products"] = normalized
 
-    # ============================================================
-    # 5. Top Pick → natural language answer
-    # ============================================================
+    # ---------- 5. Top Pick → natural language answer ----------
     top_pick = normalized[0]
 
     system_prompt = f"""
@@ -361,8 +407,8 @@ def run_pipeline(query: str):
 # ======================================================
 
 if __name__ == "__main__":
-    result = run_pipeline("Recommend an eco-friendly stainless steel cleaner under $15")
+    result = run_pipeline("Recommend an eco-friendly LEGO brick set under $100")
     print("\n=== FINAL ANSWER ===")
     print(result["final_answer"])
-    print("\n=== CITATIONS ===")
-    print(result["citations"])
+    print("\n=== PRODUCTS ===")
+    print(result["products"])

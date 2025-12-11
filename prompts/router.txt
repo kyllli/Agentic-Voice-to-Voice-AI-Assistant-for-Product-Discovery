@@ -1,7 +1,7 @@
 You are an intent classification agent for an e-commerce shopping assistant.
 
 If the user message is casual (e.g., "hello", "hi", "hey", "what's up", "how are you"),
-DO NOT try to classify a product intent.
+DO NOT classify a product intent.
 Instead return:
 {
   "intent_type": "greeting"

@@ -15,7 +15,7 @@ def load_raw_products(path=RAW_PRODUCTS_PATH) -> pd.DataFrame:
 
 
 # ============================================================
-# Clean + Filter for Clothing, Shoes & Jewelry
+# Clean + Filter for Toys & Games
 # ============================================================
 
 def clean_products(df: pd.DataFrame) -> pd.DataFrame:
@@ -37,12 +37,12 @@ def clean_products(df: pd.DataFrame) -> pd.DataFrame:
     df = df.rename(columns=rename_map)
 
     # --------------------------------------------------------
-    # 2) Filter to Clothing, Shoes & Jewelry category
+    # 2) Filter to Toys & Games category
     # --------------------------------------------------------
     df = df[
         df["category_raw"]
         .astype(str)
-        .str.contains("Clothing, Shoes & Jewelry", case=False, na=False)
+        .str.contains("Toys & Games", case=False, na=False)
     ].copy()
 
     # If dataset has no matching rows → return empty schema
@@ -56,7 +56,7 @@ def clean_products(df: pd.DataFrame) -> pd.DataFrame:
     # --------------------------------------------------------
     # 3) Standard category + subcategory
     # --------------------------------------------------------
-    df["category"] = "Clothing, Shoes & Jewelry"
+    df["category"] = "Toys & Games"
 
     if "subcategory_raw" in df.columns:
         df["subcategory"] = df["subcategory_raw"].astype(str)
@@ -104,7 +104,7 @@ def clean_products(df: pd.DataFrame) -> pd.DataFrame:
         df["features"] = ""
 
     # --------------------------------------------------------
-    # 7) Ingredients (usually not available for clothing)
+    # 7) Ingredients
     # --------------------------------------------------------
     if "Ingredients" in df.columns:
         df["ingredients"] = (
@@ -162,7 +162,7 @@ def run_cleaning_pipeline() -> None:
     print("Loading raw products from:", RAW_PRODUCTS_PATH)
     df_raw = load_raw_products()
 
-    print("Cleaning + filtering for Clothing, Shoes & Jewelry...")
+    print("Cleaning + filtering for Toys & Games...")
     df_clean = clean_products(df_raw)
 
     print(f"Cleaned {len(df_clean)} products. Saving to {CLEAN_PRODUCTS_PATH} ...")

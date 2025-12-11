@@ -1,18 +1,175 @@
 System Prompts for Multi-Agent LangGraph Pipeline
+=================================================
 
-This file lists all system-level behaviors used by the three LLM agents:
-- Router Agent
-- Planner Agent
-- Answerer Agent
+This document describes all system-level behaviors enforced by the three LLM
+agents used in our LangGraph product discovery pipeline:
 
-All system prompts are defined inside assistant_graph.py and disclosed verbatim in:
+1. Router Agent
+2. Planner Agent
+3. Answerer Agent
+
+The system prompts listed here are defined inside assistant_graph.py and
+mirrored verbatim in:
 - router.txt
 - planner.txt
 - answerer.txt
 
-These prompts enforce:
-- JSON-only outputs
-- Structured reasoning
-- Controlled tool use
-- Grounded answers
-- Safety and citation requirements
+These prompts collectively enforce:
+
+- Structured intent detection
+- Controlled tool planning
+- Grounded retrieval using private product data
+- Safe and non-hallucinatory answer generation
+- Greeting handling
+- Out-of-domain handling
+- Early pipeline termination when retrieval is unnecessary
+- JSON-only outputs where applicable
+- Compliance with citation and grounding requirements
+
+----------------------------------------------------------------------
+1. Router Agent — System Behavior
+----------------------------------------------------------------------
+
+The Router Agent is responsible for interpreting the user's message and
+producing one of three possible intent types:
+
+A. Greeting Intent  
+B. Out-of-Domain Intent  
+C. Product Query Intent  
+
+The Router Agent enforces the following rules:
+
+1. Greeting Detection  
+   If the user message is a simple greeting (e.g., "hello", "hi", "good morning"),
+   the Router returns:
+   {
+     "intent_type": "greeting"
+   }
+   The pipeline stops early, bypassing the Planner, Retriever, and Answerer,
+   and returns a friendly greeting message.
+
+2. Out-of-Domain Detection  
+   The system supports a curated dataset limited to the Toys & Games category.
+   If the user asks for products outside this domain (e.g., clothing,
+   electronics, cleaning products), the Router returns:
+   {
+     "intent_type": "out_of_domain",
+     "product_type": "..."
+   }
+   The pipeline stops early and returns a domain-limitation message.
+
+3. Product Query Extraction  
+   If the message contains a valid shopping intent, the Router extracts
+   structured information:
+   - product_type
+   - constraints (budget, brand, material, category)
+   - needs_live_price (boolean)
+
+   It must output structured JSON only:
+   {
+     "intent_type": "product_query",
+     "product_type": "...",
+     "constraints": { ... },
+     "needs_live_price": true/false
+   }
+
+----------------------------------------------------------------------
+2. Planner Agent — System Behavior
+----------------------------------------------------------------------
+
+The Planner Agent only runs when:
+intent_type = "product_query"
+
+Its job is to determine:
+- Which tools must be invoked
+- The execution order of those tools
+- What metadata fields are required
+- How conflicts (e.g., price differences) should be resolved
+
+Planner rules:
+
+1. RAG must always run first for grounding.
+2. Web search runs only when needs_live_price = true.
+3. Required fields must include “price” when a budget is present.
+4. The planner outputs a JSON object:
+   {
+     "tools": [...],
+     "fields_needed": [...],
+     "reason": "...",
+     "conflict_policy": "web_price_overwrites"
+   }
+
+Greeting and out-of-domain intents bypass the Planner entirely.
+
+----------------------------------------------------------------------
+3. Retriever Agent — System Behavior
+----------------------------------------------------------------------
+
+The Retriever Agent is responsible for executing tools selected by the Planner.
+
+1. RAG Search Behavior  
+   To avoid over-constraining retrieval, only the "budget" constraint is passed
+   into rag.search. Brand, material, and category constraints are not forwarded
+   because they may inadvertently filter out valid results (e.g., fuzzy brand
+   matches such as “LEGO” vs “LEGO Education”).
+
+2. Web Search Behavior  
+   Runs only when requested by the Planner, used strictly to supplement pricing.
+
+3. Early Termination  
+   If the Router emitted a greeting or out-of-domain intent, Retriever does not run.
+
+----------------------------------------------------------------------
+4. Answerer Agent — System Behavior
+----------------------------------------------------------------------
+
+The Answerer Agent generates the final natural-language response.
+
+1. Early Return for Non-Product Intents  
+   The Answerer MUST NOT overwrite Router responses for:
+   - intent_type = "greeting"
+   - intent_type = "out_of_domain"
+   In such cases, final_answer is left unchanged and products = [].
+
+2. Handling Missing RAG Results  
+   If rag_results = [], the Answerer returns a safe fallback:
+   "Sorry, I couldn't find matching products. Try adjusting your budget or adding more details."
+
+3. Grounded Recommendation Generation  
+   When RAG results exist:
+   - Rank candidates using a simple scoring function (rating + budget fit)
+   - Optionally override price using matched web results
+   - Select exactly one Top Pick
+   - Normalize metadata for UI display
+
+4. Spoken Answer Requirements  
+   The Answerer generates a short (<15 seconds) spoken recommendation using
+   ONLY grounded metadata from the Top Pick:
+   - title
+   - brand
+   - rating (only if > 0)
+   - price (only if > 0)
+   - features (optional)
+
+   It must not:
+   - Mention any product not in the RAG results
+   - Invent features or prices
+   - Compare products by name
+
+   It must end with the fixed phrase:
+   "I've sent details and sources to your screen. If you'd like a cheaper,
+    premium, or more balanced option, just let me know."
+
+----------------------------------------------------------------------
+5. Overall System Guarantees
+----------------------------------------------------------------------
+
+The system ensures:
+
+- No hallucinated products
+- All recommendations grounded in private RAG data
+- Consistent tool selection logic
+- Deterministic domain behavior
+- Safe termination for non-product queries
+- Clear generation boundaries between agents
+- Fully explainable end-to-end behavior

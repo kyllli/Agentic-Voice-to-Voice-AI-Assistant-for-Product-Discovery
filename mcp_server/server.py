@@ -34,12 +34,11 @@ class WebSearchRequest(BaseModel):
 
 @app.get("/mcp/tools")
 async def list_tools():
-    """Discovery endpoint listing available tools + their JSON schemas."""
     return {
         "tools": [
             {
                 "name": "rag.search",
-                "description": "Search local Amazon 2020 cleaning-product slice.",
+                "description": "Search local Amazon product slice.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -89,28 +88,68 @@ async def list_tools():
 
 # ---------- Tools ----------
 
+import difflib
+
+def fuzzy_match(a: str, b: str, threshold=0.45) -> bool:
+    """Basic fuzzy matching for brand & category."""
+    if not a or not b:
+        return False
+    return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio() >= threshold
+
+
 @app.post("/mcp/tools/rag.search")
 async def mcp_rag_search(req: RagSearchRequest):
     try:
         constraints = req.constraints or {}
+
         max_price = constraints.get("budget")
         brand = constraints.get("brand")
-        subcategory = constraints.get("category")
+        category = constraints.get("category")
 
         logger.info(
             f"[rag.search] query='{req.query}', "
-            f"max_price={max_price}, brand={brand}, subcategory={subcategory}"
+            f"max_price={max_price}, brand={brand}, category={category}"
         )
 
-        results = search_products(
+        # ---------------------------------------------------------
+        # 🔥 DO NOT pass brand/category directly into search_products
+        #     because they perform STRICT matching → empty results.
+        #
+        # Instead:
+        #   - let search_products retrieve candidates from embeddings
+        #   - apply fuzzy filtering AFTERWARD
+        # ---------------------------------------------------------
+
+        raw_results = search_products(
             query=req.query,
-            max_results=req.max_results,
+            max_results=req.max_results * 5,  # retrieve more candidates
             max_price=max_price,
-            brand=brand,
-            subcategory_filter=subcategory,
         )
 
-        return {"results": results}
+        filtered = []
+        for p in raw_results:
+            ok = True
+
+            # Fuzzy brand
+            if brand:
+                prod_brand = p.get("brand", "")
+                if prod_brand and not fuzzy_match(prod_brand, brand):
+                    ok = False
+
+            # Fuzzy category / subcategory
+            if category:
+                prod_cat = p.get("subcategory", "") or p.get("category", "")
+                if prod_cat and not fuzzy_match(prod_cat, category):
+                    ok = False
+
+            if ok:
+                filtered.append(p)
+
+        # Clip to max_results
+        filtered = filtered[:req.max_results]
+
+        logger.info(f"[rag.search] returning {len(filtered)} results")
+        return {"results": filtered}
 
     except Exception as e:
         logger.exception("Error in rag.search")

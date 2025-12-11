@@ -9,10 +9,10 @@ PROCESSED_DIR = DATA_DIR / "processed"
 INDEX_DIR = DATA_DIR / "index"
 
 RAW_PRODUCTS_PATH = RAW_DIR / "marketing_sample_for_amazon_com-ecommerce__20200101_20200131__10k_data.csv"
-CLEAN_PRODUCTS_PATH = PROCESSED_DIR / "clean_products_clothing.parquet"
+CLEAN_PRODUCTS_PATH = PROCESSED_DIR / "clean_products.parquet"
 
-CHROMA_PATH = INDEX_DIR / "chroma_products_clothing"
-CHROMA_COLLECTION_NAME = "products_clothing"
+CHROMA_PATH = INDEX_DIR / "chroma_products"
+CHROMA_COLLECTION_NAME = "products"
 
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 

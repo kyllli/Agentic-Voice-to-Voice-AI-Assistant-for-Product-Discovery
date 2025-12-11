@@ -129,7 +129,7 @@ def search_products(
             "ingredients": ingredients,
             "product_url": product_url,
             "image_url": image_url,
-            "doc_id": f"products_clothing::{pid}",
+            "doc_id": f"products::{pid}",
             "_distance": dist,
         })
 

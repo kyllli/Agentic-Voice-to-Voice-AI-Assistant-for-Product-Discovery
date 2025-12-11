@@ -13,7 +13,7 @@ from .data_prep import run_cleaning_pipeline
 
 
 def build_index_from_clean_df(batch_size: int = 256) -> None:
-    # Load cleaned clothing dataset
+    # Load cleaned dataset
     df = pd.read_parquet(CLEAN_PRODUCTS_PATH)
 
     embed_model = SentenceTransformer(EMBED_MODEL_NAME)
@@ -28,7 +28,7 @@ def build_index_from_clean_df(batch_size: int = 256) -> None:
     collection = chroma_client.get_or_create_collection(CHROMA_COLLECTION_NAME)
 
     # ---------------------------------------------------
-    # Embedding text: richer for Clothing, Shoes & Jewelry
+    # Embedding text: richer for Toys & Games
     # ---------------------------------------------------
     # Includes: brand, title, subcategory, features
     texts = (
@@ -83,7 +83,7 @@ def build_index_from_clean_df(batch_size: int = 256) -> None:
 
 
 def rebuild_index() -> None:
-    """Full pipeline: clean clothing dataset + rebuild Chroma index."""
+    """Full pipeline: clean dataset + rebuild Chroma index."""
     run_cleaning_pipeline()
     build_index_from_clean_df()
 
