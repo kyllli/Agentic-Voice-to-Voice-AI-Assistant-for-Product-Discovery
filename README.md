@@ -22,40 +22,29 @@ The system integrates **LangGraph multi-agent orchestration**, **MCP tools**, **
 
 ## 📂 Repository Structure
 
-├── assistant_graph.py          # LangGraph multi-agent pipeline
-
-├── audio_handler.py            # Whisper ASR + TTS utilities
-
-├── main.py                     # Backend orchestrator (ASR → agents → TTS)
-
-├── mcp_client.py               # Client for calling MCP tools from the backend
-
-├── mcp_server/                 # MCP server exposing rag.search + web.search
-
-│   ├── server.py               # Main MCP server (HTTP)
-
-│   ├── web_search.py           # Live web search tool implementation
-
-├── prompts/                # Tool + agent prompts (Prompt Disclosure)
-│   ├── system.txt
-│   ├── router.txt
-│   ├── planner.txt
-│   └── answerer.txt
-
-├── rag/                    # Private RAG index + utilities
-│   ├── config.py           # Paths for dataset + Chroma index
-│   ├── data_prep.py        # Cleaning + preprocessing pipeline
-│   ├── build_index.py      # Embedding + ChromaDB index builder
-│   └── search.py           # rag.search tool logic
-
-├── src/                        # React UI
-├── data/                       # Clean dataset + generated vector store (ignored in repo)
-
-├── .env.example                # Environment template (API keys, configs)
-├── .gitignore
-├── requirements.txt
-└── README.md
-</details>
+- assistant_graph.py          # LangGraph multi-agent pipeline
+- audio_handler.py            # Whisper ASR + TTS utilities
+- main.py                     # Backend orchestrator (ASR → agents → TTS)
+- mcp_client.py               # Client for calling MCP tools from the backend
+- mcp_server/                 # MCP server exposing rag.search + web.search
+  - server.py               # Main MCP server (HTTP)
+  - web_search.py           # Live web search tool implementation
+- prompts/                # Tool + agent prompts (Prompt Disclosure)
+  - system.txt
+  - router.txt
+  - planner.txt
+  - answerer.txt
+- rag/                    # Private RAG index + utilities
+  - config.py           # Paths for dataset + Chroma index
+  - data_prep.py        # Cleaning + preprocessing pipeline
+  - build_index.py      # Embedding + ChromaDB index builder
+  - search.py           # rag.search tool logic
+- src/                        # React UI
+- data/                       # Clean dataset + generated vector store (ignored in repo)
+- .env.example                # Environment template (API keys, configs)
+- .gitignore
+- requirements.txt
+- README.md
 
 ---
 
