@@ -52,6 +52,7 @@ The system integrates **LangGraph multi-agent orchestration**, **MCP tools**, **
 ├── .gitignore
 ├── requirements.txt
 └── README.md
+```
 
 ---
 
