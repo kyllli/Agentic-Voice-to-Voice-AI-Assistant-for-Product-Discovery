@@ -22,15 +22,18 @@ The system integrates **LangGraph multi-agent orchestration**, **MCP tools**, **
 
 ## 📂 Repository Structure
 
-<details>
-<summary><strong>Click to expand folder structure</strong></summary>
 ├── assistant_graph.py          # LangGraph multi-agent pipeline
+
 ├── audio_handler.py            # Whisper ASR + TTS utilities
+
 ├── main.py                     # Backend orchestrator (ASR → agents → TTS)
+
 ├── mcp_client.py               # Client for calling MCP tools from the backend
 
 ├── mcp_server/                 # MCP server exposing rag.search + web.search
+
 │   ├── server.py               # Main MCP server (HTTP)
+
 │   ├── web_search.py           # Live web search tool implementation
 
 ├── prompts/                # Tool + agent prompts (Prompt Disclosure)
