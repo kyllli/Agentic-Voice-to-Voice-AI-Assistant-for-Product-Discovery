@@ -22,7 +22,8 @@ The system integrates **LangGraph multi-agent orchestration**, **MCP tools**, **
 
 ## 📂 Repository Structure
 
-.
+<details>
+<summary><strong>Click to expand folder structure</strong></summary>
 ├── assistant_graph.py          # LangGraph multi-agent pipeline
 ├── audio_handler.py            # Whisper ASR + TTS utilities
 ├── main.py                     # Backend orchestrator (ASR → agents → TTS)
@@ -51,7 +52,7 @@ The system integrates **LangGraph multi-agent orchestration**, **MCP tools**, **
 ├── .gitignore
 ├── requirements.txt
 └── README.md
-
+</details>
 
 ---
 
